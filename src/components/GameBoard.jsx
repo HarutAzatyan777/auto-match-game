@@ -21,7 +21,7 @@
  *   REVERTING → no-match swap shown briefly, then restored
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import { motion, AnimatePresence, animate, LayoutGroup } from 'framer-motion';
 import useGameStore from '../store/useGameStore';
 import { worlds } from '../config/levels';
@@ -188,6 +188,81 @@ function swapCells(grid, a, b) {
 function matchesToSet(matches) {
   return new Set(matches.map(({ row, col }) => `${row},${col}`));
 }
+
+// ---------------------------------------------------------------------------
+// Memoized single grid cell — only re-renders when its own primitive props change
+// ---------------------------------------------------------------------------
+
+const TileCell = memo(function TileCell({
+  tileId,
+  tileType,
+  row,
+  col,
+  isMatch,
+  isSwap,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  cfg,
+}) {
+  const btnClass = [
+    'rounded-md z-20',
+    'font-bold cursor-grab active:cursor-grabbing',
+    'transition-all duration-150 hover:scale-105 hover:brightness-110',
+    isMatch ? 'ring-2 ring-white scale-110 brightness-150 animate-pulse z-30' : '',
+    isSwap  ? 'scale-90 opacity-70' : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <div
+      className="w-[38px] h-[38px] shrink-0 bg-slate-900/60 border border-slate-800/40 relative flex items-center justify-center shadow-inner"
+    >
+      <motion.button
+        key={tileId}
+        // NOTE: 'layout' removed — it triggers synchronous getBoundingClientRect() on
+        // every render for every tile, causing main-thread jank on mobile.
+        // Gravity/drop-in is handled by the spring y:-150→0 initial animation instead.
+        initial={{ y: -150, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ scale: 1.3, opacity: 0 }}
+        transition={{
+          type: 'spring',
+          stiffness: 320,
+          damping: 28,
+          // Exit via tween so it doesn't linger while cascade continues
+          exit: { type: 'tween', ease: 'easeOut', duration: 0.18 },
+        }}
+        id={`cell-${row}-${col}`}
+        role="gridcell"
+        aria-label={`${cfg.label} at row ${row + 1} column ${col + 1}`}
+        onPointerDown={(e) => onPointerDown(e, row, col)}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        // Suppress the browser context-menu (long-press on Android / right-click on desktop)
+        // to prevent it from interrupting a drag gesture mid-swipe.
+        onContextMenu={(e) => e.preventDefault()}
+        style={{
+          touchAction: 'none',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          // Prevent iOS callout (save-image / open-link popup) on long-press
+          WebkitTouchCallout: 'none',
+          position: 'absolute',
+          top: 1,
+          left: 1,
+          width: 'calc(100% - 2px)',
+          height: 'calc(100% - 2px)',
+          // Force GPU compositing — avoids paint/layout on every animation frame
+          willChange: 'transform, opacity',
+          transform: 'translateZ(0)',
+        }}
+        className={btnClass}
+      >
+        <GameTile type={tileType} />
+      </motion.button>
+    </div>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Component
@@ -567,6 +642,11 @@ export default function GameBoard() {
    * if the finger slides off it (critical for fast swipes on mobile).
    */
   const handlePointerDown = useCallback((e, row, col) => {
+    // Prevent the browser from starting a scroll/zoom gesture at the touch origin.
+    // Must be called synchronously in pointerdown (before any async work) for
+    // Telegram WebView to honour it.
+    e.preventDefault();
+
     if (isProcessing || movesRemaining <= 0 || score >= levelConfig.targetScore) return;
 
     // Guard against pointer-down on wall tiles or blockers
@@ -597,6 +677,10 @@ export default function GameBoard() {
    * Handle active pointer movement: locks axis and translates the tile.
    */
   const handlePointerMove = useCallback((e) => {
+    // Suppress pull-to-refresh and momentum scroll while a drag is in progress.
+    // This is the most common cause of jank/bounce in Telegram WebView.
+    e.preventDefault();
+
     const drag = dragRef.current;
     if (!drag || isProcessing) return;
 
@@ -633,6 +717,10 @@ export default function GameBoard() {
    * On pointer-up: compute delta, resolve swipe direction, fire the swap.
    */
   const handlePointerUp = useCallback((e) => {
+    // Prevent a fast finger-lift from triggering a synthetic browser scroll
+    // or a click-to-follow-link event on the element beneath the finger.
+    e.preventDefault();
+
     const drag = dragRef.current;
     if (!drag) return;
 
@@ -765,7 +853,19 @@ export default function GameBoard() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className={`fixed grid grid-cols-1 justify-items-center content-start gap-4 select-none w-[380px] h-[520px] p-5 rounded-3xl bg-gradient-to-br ${levelConfig.backgroundStyle} border shadow-2xl transition-all duration-500 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 overflow-hidden`}>
+    <div
+      className={`fixed grid grid-cols-1 justify-items-center content-start gap-4 w-[380px] h-[520px] p-5 rounded-3xl bg-gradient-to-br ${levelConfig.backgroundStyle} border shadow-2xl transition-all duration-500 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 overflow-hidden`}
+      style={{
+        // Prevent ANY native scroll/zoom/pull-to-refresh gesture on the whole panel.
+        // This is the outermost defence — stops Telegram WebView from intercepting
+        // the touch before pointer events even fire.
+        touchAction: 'none',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        // Prevent iOS callout (long-press menu) on images/text inside the board
+        WebkitTouchCallout: 'none',
+      }}
+    >
 
       {/* 🔄 Shuffling Notification */}
       <AnimatePresence>
@@ -795,6 +895,16 @@ export default function GameBoard() {
         className={`grid grid-cols-8 p-[6px] rounded-2xl bg-transparent overflow-hidden relative w-[316px] h-[316px] mx-auto ${isProcessing || movesRemaining === 0 ? 'pointer-events-none' : ''}`}
         role="grid"
         aria-label="Game board"
+        onContextMenu={(e) => e.preventDefault()}
+        style={{
+          // Second layer of protection on the grid itself.
+          // Redundant with the outer div but guards against future structural changes.
+          touchAction: 'none',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          // Prevent iOS long-press callout (image-save / link-open menu) inside the grid
+          WebkitTouchCallout: 'none',
+        }}
       >
         {/* Interactive Tiles Layer */}
         <AnimatePresence>
@@ -813,70 +923,34 @@ export default function GameBoard() {
                 );
               }
 
-              const cfg      = PART_CONFIG[tile.type] ?? PART_CONFIG.wrench;
-              const isMatch  = matchedSet.has(`${rIndex},${cIndex}`);
-              const isSwap   =
+              const cfg     = PART_CONFIG[tile.type] ?? PART_CONFIG.wrench;
+              const isMatch = matchedSet.has(`${rIndex},${cIndex}`);
+              const isSwap  = Boolean(
                 swapping &&
                 ((swapping.a.row === rIndex && swapping.a.col === cIndex) ||
-                 (swapping.b.row === rIndex && swapping.b.col === cIndex));
+                 (swapping.b.row === rIndex && swapping.b.col === cIndex))
+              );
 
               return (
                 <div
-                  key={`cell-wrapper-${rIndex}-${cIndex}`}
+                  key={tile.id}
                   style={{
                     gridRowStart: rIndex + 1,
                     gridColumnStart: cIndex + 1,
                   }}
-                  className="w-[38px] h-[38px] shrink-0 bg-slate-900/60 border border-slate-800/40 relative flex items-center justify-center shadow-inner"
                 >
-                  <motion.button
-                    key={tile.id}
-                    layout
-                    initial={{ y: -150, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ scale: 1.4, opacity: 0, rotate: 45 }}
-                    transition={{
-                      type: "spring",
-                      stiffness: 300,
-                      damping: 26,
-                      exit: {
-                        type: "tween",
-                        ease: "easeOut",
-                        duration: 0.22,
-                      }
-                    }}
-                    id={`cell-${rIndex}-${cIndex}`}
-                    role="gridcell"
-                    aria-label={`${cfg.label} at row ${rIndex + 1} column ${cIndex + 1}`}
-                    // Pointer events replace the old click-to-select model
-                    onPointerDown={(e) => handlePointerDown(e, rIndex, cIndex)}
+                  <TileCell
+                    tileId={tile.id}
+                    tileType={tile.type}
+                    row={rIndex}
+                    col={cIndex}
+                    isMatch={isMatch}
+                    isSwap={isSwap}
+                    cfg={cfg}
+                    onPointerDown={handlePointerDown}
                     onPointerMove={handlePointerMove}
                     onPointerUp={handlePointerUp}
-                    // Prevent touch scroll and fill the wrapper cell
-                    style={{
-                      touchAction: 'none',
-                      position: 'absolute',
-                      top: 1,
-                      left: 1,
-                      width: 'calc(100% - 2px)',
-                      height: 'calc(100% - 2px)',
-                    }}
-                    className={[
-                      'rounded-md z-20',
-                      'font-bold cursor-grab active:cursor-grabbing',
-                      'transition-all duration-150 hover:scale-105 hover:brightness-110',
-                      // matched flash
-                      isMatch
-                        ? 'ring-2 ring-white scale-110 brightness-150 animate-pulse z-30'
-                        : '',
-                      // swap wobble
-                      isSwap ? 'scale-90 opacity-70' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                  >
-                    <GameTile type={tile.type} />
-                  </motion.button>
+                  />
                 </div>
               );
             }),
@@ -923,9 +997,9 @@ export default function GameBoard() {
             <motion.div
               key={token.id}
               initial={{ x: token.startX - 12, y: token.startY - 12, scale: 1, opacity: 1 }}
-              animate={{ x: dest.x - 12, y: dest.y - 12, scale: 0.5, opacity: 0.8 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.5, ease: "easeOut" }}
+              animate={{ x: dest.x - 12, y: dest.y - 12, scale: 0.5, opacity: 0.85 }}
+              exit={{ opacity: 0, scale: 0.3 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
               onAnimationComplete={() => {
                 // Decrement target count on arrival
                 const next = targetsRef.current.map(t => {
@@ -946,6 +1020,10 @@ export default function GameBoard() {
                 height: '24px',
                 zIndex: 9999,
                 pointerEvents: 'none',
+                // GPU compositing hint — x/y are already transforms but this
+                // promotes the element to its own layer immediately on mount
+                willChange: 'transform, opacity',
+                transform: 'translateZ(0)',
               }}
             >
               <GameTile type={token.type} />

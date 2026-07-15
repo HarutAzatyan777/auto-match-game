@@ -1,3 +1,23 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ─── Mobile: prevent pull-to-refresh, overscroll bounce, and text selection ─
+   Must be set at the html/body level — element-level touch-action:none alone
+   is not enough to stop Telegram WebView / iOS Safari from bouncing the page. */
+html,
+body {
+  overscroll-behavior: none;          /* kill pull-to-refresh + bounce on Android Chrome */
+  overscroll-behavior-y: none;        /* belt-and-suspenders for older browsers */
+  touch-action: none;                 /* stop ALL native touch gestures on the document */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent; /* removes the grey flash on tap (iOS/Android) */
+}
+
+#root {
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}

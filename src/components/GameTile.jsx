@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { motion } from 'framer-motion';
 
 const WoodIcon = () => (
@@ -112,7 +113,7 @@ const HelicopterIcon = () => (
   </svg>
 );
 
-export default function GameTile({ type }) {
+function GameTile({ type }) {
   if (type === 'WOOD') {
     return (
       <div className="relative w-full h-full rounded-xl bg-amber-800 border border-b-[3px] border-amber-950/70 shadow-[0_4px_6px_rgba(0,0,0,0.35),inset_0_2px_4px_rgba(255,255,255,0.15)] flex items-center justify-center overflow-hidden aspect-square select-none pointer-events-none" title="Wood Crate">
@@ -294,3 +295,5 @@ export default function GameTile({ type }) {
     </div>
   );
 }
+
+export default memo(GameTile);
